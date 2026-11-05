@@ -4,16 +4,23 @@ import { createEffect, onCleanup } from "solid-js"
 
 export type PendingSession = { id: string; title?: string } & (
   | { state: "blocked"; kind: ProgramStatusKind; message?: string }
-  | { state: "working" }
+  | { state: "working" | "done" | "error" }
 )
 
 const APP = "opencode"
 const ROOT = ""
+// Most urgent first. The root record summarizes the most urgent of the remaining states.
+const SUMMARIES = [
+  ["working", "working"],
+  ["error", "failed"],
+  ["done", "done"],
+] as const
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
-// Mirrors pending session state into OSC 7501 records: one root summary plus one child record per
-// pending session. Terminals drop working and blocked records when the process exits.
+// Mirrors session state that needs the user into OSC 7501 records: one root summary plus one child
+// record per session that is working, blocked, or finished unread. Terminals drop working and
+// blocked records when the process exits, but keep done and error ones for the user to find.
 export function createProgramStatus(input: {
   renderer: { setProgramStatus(status: ProgramStatus): boolean }
   sessions: () => PendingSession[]
@@ -28,6 +35,10 @@ export function createProgramStatus(input: {
     }
     sent.set(key, JSON.stringify(status))
   }
+
+  // Done and error records outlive the process, so start from an empty set: a session read since
+  // the last run would otherwise keep its finished record, because this run never sent it.
+  send(ROOT, { state: "clear" })
 
   createEffect(() => {
     const reports = programStatusReports(input.sessions())
@@ -54,7 +65,6 @@ export function programStatusReports(sessions: PendingSession[]) {
 
 function root(sessions: PendingSession[]): ProgramStatus {
   const blocked = sessions.filter((session) => session.state === "blocked")
-  const working = sessions.filter((session) => session.state === "working")
   if (blocked.length === 1) return record(blocked[0])
   if (blocked.length > 1)
     return {
@@ -63,15 +73,18 @@ function root(sessions: PendingSession[]): ProgramStatus {
       app: APP,
       message: `${blocked.length} sessions need input`,
     }
-  if (working.length === 1) return record(working[0])
-  if (working.length > 1) return { state: "working", app: APP, message: `${working.length} sessions working` }
-  return { state: "idle", app: APP }
+  const summary = SUMMARIES.find(([state]) => sessions.some((session) => session.state === state))
+  if (!summary) return { state: "idle", app: APP }
+  const matching = sessions.filter((session) => session.state === summary[0])
+  if (matching.length === 1) return record(matching[0])
+  return { state: summary[0], app: APP, message: `${matching.length} sessions ${summary[1]}` }
 }
 
 function record(session: PendingSession, id?: string): ProgramStatus {
   const title = clip(session.title, 192)
-  if (session.state === "working") return { state: "working", id, app: APP, title }
-  return { state: "blocked", kind: session.kind, id, app: APP, title, message: clip(session.message, 2048) }
+  if (session.state === "blocked")
+    return { state: "blocked", kind: session.kind, id, app: APP, title, message: clip(session.message, 2048) }
+  return { state: session.state, id, app: APP, title }
 }
 
 // Record IDs must be 1-32 bytes of [A-Za-z0-9_.+-], but Session IDs only need a "ses" prefix.
