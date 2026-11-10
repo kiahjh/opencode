@@ -195,7 +195,10 @@ export const { use: useSessionTabs, provider: SessionTabsProvider } = createSimp
               },
             ]
           if (session.busy) return [{ id: sessionID, title: title(sessionID), state: "working" }]
-          return []
+          if (!session.unread || data.session.get(sessionID)?.outcome === "interrupted") return []
+          // The session on screen is marked viewed once the server confirms it; don't report it as done meanwhile.
+          if (focused() === true && sessionID === viewed) return []
+          return [{ id: sessionID, title: title(sessionID), state: session.unread === "error" ? "error" : "done" }]
         })
       },
     })

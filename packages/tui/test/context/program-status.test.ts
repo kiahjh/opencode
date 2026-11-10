@@ -16,6 +16,8 @@ function setup(initial: PendingSession[] = []) {
       },
       sessions,
     })
+    // Every run starts by clearing records a previous run left behind.
+    expect(reports.shift()).toEqual({ state: "clear" })
     return { reports, setSessions, dispose }
   })
 }
@@ -54,6 +56,40 @@ test("summarizes several pending sessions and clears resolved ones", () => {
 
   status.dispose()
   expect(status.reports).toEqual([{ state: "clear" }])
+})
+
+test("reports a finished unread session until it is read", () => {
+  const status = setup([{ id: "ses_a", title: "Fix build", state: "working" }])
+  status.reports.length = 0
+
+  status.setSessions([{ id: "ses_a", title: "Fix build", state: "done" }])
+  expect(status.reports).toEqual([
+    { state: "done", app: "opencode", title: "Fix build" },
+    { state: "done", id: "ses_a", app: "opencode", title: "Fix build" },
+  ])
+  status.reports.length = 0
+
+  status.setSessions([])
+  expect(status.reports).toEqual([
+    { state: "clear", id: "ses_a" },
+    { state: "idle", app: "opencode" },
+  ])
+  status.dispose()
+})
+
+test("summarizes the most urgent state on the root", () => {
+  const root = (sessions: PendingSession[]) => programStatusReports(sessions).get("")
+  const done = { id: "ses_a", state: "done" } as const
+  const failed = { id: "ses_b", state: "error" } as const
+  const working = { id: "ses_c", state: "working" } as const
+
+  expect(root([done, failed, working])).toEqual({ state: "working", app: "opencode" })
+  expect(root([done, failed])).toEqual({ state: "error", app: "opencode" })
+  expect(root([done, { id: "ses_d", state: "done" }])).toEqual({
+    state: "done",
+    app: "opencode",
+    message: "2 sessions done",
+  })
 })
 
 test("keeps record IDs within the protocol's name rules", () => {
